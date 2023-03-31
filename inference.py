@@ -16,6 +16,7 @@ from dockutils.sampling import randomize_position, sampling
 from dockutils.utils import get_model
 from dockutils.visualise import PDBFile
 from tqdm import tqdm
+from trill.utils.esm_utils import ESM_IF1_Wrangle
 
 RDLogger.DisableLog('rdApp.*')
 import yaml
@@ -46,9 +47,9 @@ def run_diffdock(args, diffdock_root):
     args.protein_ligand_csv = None
     args.out_dir = 'DiffDock_out'
     args.model_dir = f'{diffdock_root}/workdir/paper_score_model'
-    args.ckpt = f'{diffdock_root}/workdir/paper_score_model/best_ema_inference_epoch_model.pt'
+    args.ckpt = f'best_ema_inference_epoch_model.pt'
     args.confidence_model_dir = f'{diffdock_root}/workdir/paper_confidence_model'
-    args.confidence_ckpt = f'{diffdock_root}/workdir/paper_confidence_model/best_model_epoch75.pt'
+    args.confidence_ckpt = f'best_model_epoch75.pt'
 
     os.makedirs(args.out_dir, exist_ok=True)
     with open(f'{args.model_dir}/model_parameters.yml') as f:
@@ -59,27 +60,32 @@ def run_diffdock(args, diffdock_root):
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    if args.protein_ligand_csv is not None:
-        df = pd.read_csv(args.protein_ligand_csv)
-        complex_name_list = set_nones(df['complex_name'].tolist())
-        protein_path_list = set_nones(df['protein_path'].tolist())
-        protein_sequence_list = set_nones(df['protein_sequence'].tolist())
-        ligand_description_list = set_nones(df['ligand_description'].tolist())
-    else:
-        complex_name_list = [args.complex_name]
-        protein_path_list = [args.protein_path]
-        protein_sequence_list = [args.protein_sequence]
-        ligand_description_list = [args.ligand_description]
+    # if args.protein_ligand_csv is not None:
+    #     df = pd.read_csv(args.protein_ligand_csv)
+    #     complex_name_list = set_nones(df['complex_name'].tolist())
+    #     protein_path_list = set_nones(df['protein_path'].tolist())
+    #     protein_sequence_list = set_nones(df['protein_sequence'].tolist())
+    #     ligand_description_list = set_nones(df['ligand_description'].tolist())
+    # else:
+    #     complex_name_list = [args.complex_name]
+    #     protein_path_list = [args.protein_path]
+    #     protein_sequence_list = [args.protein_sequence]
+    #     ligand_description_list = [args.ligand_description]
 
-    complex_name_list = [name if name is not None else f"complex_{i}" for i, name in enumerate(complex_name_list)]
-    for name in complex_name_list:
-        write_dir = f'{args.out_dir}/{name}'
-        os.makedirs(write_dir, exist_ok=True)
+
+
+    # complex_name_list = [name if name is not None else f"complex_{i}" for i, name in enumerate(complex_name_list)]
+    # for name in complex_name_list:
+    #     write_dir = f'{args.out_dir}/{name}'
+    #     os.makedirs(write_dir, exist_ok=True)
+
+    protein_seq = ESM_IF1_Wrangle(args.protein)
+    protein_seq = "".join([seq for seq in protein_seq[0][-1].values()])
 
     # preprocessing of complexes into geometric graphs
-    test_dataset = InferenceDataset(out_dir=args.out_dir, complex_names=complex_name_list, protein_files=protein_path_list,
-                                    ligand_descriptions=ligand_description_list, protein_sequences=protein_sequence_list,
-                                    lm_embeddings=score_model_args.esm_embeddings_path is not None,
+    test_dataset = InferenceDataset(out_dir=args.out_dir, complex_names=[args.name], protein_files=[args.protein],
+                                    ligand_descriptions=[args.ligand], protein_sequences=protein_seq,
+                                    lm_embeddings=True,
                                     receptor_radius=score_model_args.receptor_radius, remove_hs=score_model_args.remove_hs,
                                     c_alpha_max_neighbors=score_model_args.c_alpha_max_neighbors,
                                     all_atoms=score_model_args.all_atoms, atom_radius=score_model_args.atom_radius,
@@ -90,8 +96,8 @@ def run_diffdock(args, diffdock_root):
         print('HAPPENING | confidence model uses different type of graphs than the score model. '
             'Loading (or creating if not existing) the data for the confidence model now.')
         confidence_test_dataset = \
-            InferenceDataset(out_dir=args.out_dir, complex_names=complex_name_list, protein_files=protein_path_list,
-                            ligand_descriptions=ligand_description_list, protein_sequences=protein_sequence_list,
+            InferenceDataset(out_dir=args.out_dir, complex_names=[args.name], protein_files=[args.protein],
+                            ligand_descriptions=[args.ligand], protein_sequences=protein_seq,
                             lm_embeddings=confidence_args.esm_embeddings_path is not None,
                             receptor_radius=confidence_args.receptor_radius, remove_hs=confidence_args.remove_hs,
                             c_alpha_max_neighbors=confidence_args.c_alpha_max_neighbors,
@@ -124,75 +130,81 @@ def run_diffdock(args, diffdock_root):
     failures, skipped = 0, 0
     N = args.samples_per_complex
     print('Size of test dataset: ', len(test_dataset))
-    for idx, orig_complex_graph in tqdm(enumerate(test_loader)):
+    for idx, orig_complex_graph in enumerate(test_loader):
+        print(orig_complex_graph)
         if not orig_complex_graph.success[0]:
             skipped += 1
             print(f"HAPPENING | The test dataset did not contain {test_dataset.complex_names[idx]} for {test_dataset.ligand_descriptions[idx]} and {test_dataset.protein_files[idx]}. We are skipping this complex.")
             continue
-        try:
-            if confidence_test_dataset is not None:
-                confidence_complex_graph = confidence_test_dataset[idx]
-                if not confidence_complex_graph.success:
-                    skipped += 1
-                    print(f"HAPPENING | The confidence dataset did not contain {orig_complex_graph.name}. We are skipping this complex.")
-                    continue
-                confidence_data_list = [copy.deepcopy(confidence_complex_graph) for _ in range(N)]
-            else:
-                confidence_data_list = None
-            data_list = [copy.deepcopy(orig_complex_graph) for _ in range(N)]
-            randomize_position(data_list, score_model_args.no_torsion, False, score_model_args.tr_sigma_max)
-            lig = orig_complex_graph.mol[0]
+        # try:
+        if confidence_test_dataset is not None:
+            print('here')
+            confidence_complex_graph = confidence_test_dataset[idx]
+            if not confidence_complex_graph.success:
+                skipped += 1
+                print(f"HAPPENING | The confidence dataset did not contain {orig_complex_graph.name}. We are skipping this complex.")
+                continue
+            confidence_data_list = [copy.deepcopy(confidence_complex_graph) for _ in range(N)]
+        else:
+            confidence_data_list = None
+        print('precopy')
+        data_list = [copy.deepcopy(orig_complex_graph) for _ in range(N)]
+        print('postcopy')
+        randomize_position(data_list, score_model_args.no_torsion, False, score_model_args.tr_sigma_max)
+        lig = orig_complex_graph.mol[0]
 
-            # initialize visualisation
-            pdb = None
-            if args.save_visualisation:
-                visualization_list = []
-                for graph in data_list:
-                    pdb = PDBFile(lig)
-                    pdb.add(lig, 0, 0)
-                    pdb.add((orig_complex_graph['ligand'].pos + orig_complex_graph.original_center).detach().cpu(), 1, 0)
-                    pdb.add((graph['ligand'].pos + graph.original_center).detach().cpu(), part=1, order=1)
-                    visualization_list.append(pdb)
-            else:
-                visualization_list = None
+        # initialize visualisation
+        pdb = None
+        if args.save_visualisation:
+            visualization_list = []
+            for graph in data_list:
+                pdb = PDBFile(lig)
+                pdb.add(lig, 0, 0)
+                pdb.add((orig_complex_graph['ligand'].pos + orig_complex_graph.original_center).detach().cpu(), 1, 0)
+                pdb.add((graph['ligand'].pos + graph.original_center).detach().cpu(), part=1, order=1)
+                visualization_list.append(pdb)
+        else:
+            visualization_list = None
 
-            # run reverse diffusion
-            data_list, confidence = sampling(data_list=data_list, model=model,
-                                            inference_steps=args.actual_steps if args.actual_steps is not None else args.inference_steps,
-                                            tr_schedule=tr_schedule, rot_schedule=tr_schedule, tor_schedule=tr_schedule,
-                                            device=device, t_to_sigma=t_to_sigma, model_args=score_model_args,
-                                            visualization_list=visualization_list, confidence_model=confidence_model,
-                                            confidence_data_list=confidence_data_list, confidence_model_args=confidence_args,
-                                            batch_size=args.batch_size, no_final_step_noise=args.no_final_step_noise)
-            ligand_pos = np.asarray([complex_graph['ligand'].pos.cpu().numpy() + orig_complex_graph.original_center.cpu().numpy() for complex_graph in data_list])
+        # run reverse diffusion
+        print('pre sampling')
+        data_list, confidence = sampling(data_list=data_list, model=model,
+                                        inference_steps=args.actual_steps if args.actual_steps is not None else args.inference_steps,
+                                        tr_schedule=tr_schedule, rot_schedule=tr_schedule, tor_schedule=tr_schedule,
+                                        device=device, t_to_sigma=t_to_sigma, model_args=score_model_args,
+                                        visualization_list=visualization_list, confidence_model=confidence_model,
+                                        confidence_data_list=confidence_data_list, confidence_model_args=confidence_args,
+                                        batch_size=32, no_final_step_noise=args.no_final_step_noise)
+        print('here post')
+        ligand_pos = np.asarray([complex_graph['ligand'].pos.cpu().numpy() + orig_complex_graph.original_center.cpu().numpy() for complex_graph in data_list])
 
-            # reorder predictions based on confidence output
-            if confidence is not None and isinstance(confidence_args.rmsd_classification_cutoff, list):
-                confidence = confidence[:, 0]
+        # reorder predictions based on confidence output
+        if confidence is not None and isinstance(confidence_args.rmsd_classification_cutoff, list):
+            confidence = confidence[:, 0]
+        if confidence is not None:
+            confidence = confidence.cpu().numpy()
+            re_order = np.argsort(confidence)[::-1]
+            confidence = confidence[re_order]
+            ligand_pos = ligand_pos[re_order]
+
+        # save predictions
+        write_dir = f'{args.out_dir}/'
+        for rank, pos in enumerate(ligand_pos):
+            mol_pred = copy.deepcopy(lig)
+            if score_model_args.remove_hs: mol_pred = RemoveHs(mol_pred)
+            if rank == 0: write_mol_with_coords(mol_pred, pos, os.path.join(write_dir, f'rank{rank+1}.sdf'))
+            write_mol_with_coords(mol_pred, pos, os.path.join(write_dir, f'rank{rank+1}_confidence{confidence[rank]:.2f}.sdf'))
+
+        # save visualisation frames
+        if args.save_visualisation:
             if confidence is not None:
-                confidence = confidence.cpu().numpy()
-                re_order = np.argsort(confidence)[::-1]
-                confidence = confidence[re_order]
-                ligand_pos = ligand_pos[re_order]
+                for rank, batch_idx in enumerate(re_order):
+                    visualization_list[batch_idx].write(os.path.join(write_dir, f'rank{rank+1}_reverseprocess.pdb'))
+            else:
+                for rank, batch_idx in enumerate(ligand_pos):
+                    visualization_list[batch_idx].write(os.path.join(write_dir, f'rank{rank+1}_reverseprocess.pdb'))
 
-            # save predictions
-            write_dir = f'{args.out_dir}/{complex_name_list[idx]}'
-            for rank, pos in enumerate(ligand_pos):
-                mol_pred = copy.deepcopy(lig)
-                if score_model_args.remove_hs: mol_pred = RemoveHs(mol_pred)
-                if rank == 0: write_mol_with_coords(mol_pred, pos, os.path.join(write_dir, f'rank{rank+1}.sdf'))
-                write_mol_with_coords(mol_pred, pos, os.path.join(write_dir, f'rank{rank+1}_confidence{confidence[rank]:.2f}.sdf'))
-
-            # save visualisation frames
-            if args.save_visualisation:
-                if confidence is not None:
-                    for rank, batch_idx in enumerate(re_order):
-                        visualization_list[batch_idx].write(os.path.join(write_dir, f'rank{rank+1}_reverseprocess.pdb'))
-                else:
-                    for rank, batch_idx in enumerate(ligand_pos):
-                        visualization_list[batch_idx].write(os.path.join(write_dir, f'rank{rank+1}_reverseprocess.pdb'))
-
-        except Exception as e:
+        # except Exception as e:
             print("Failed on", orig_complex_graph["name"], e)
             failures += 1
 

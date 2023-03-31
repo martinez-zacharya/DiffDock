@@ -18,8 +18,8 @@ from torch_cluster import radius_graph
 
 import torch.nn.functional as F
 
-from datasets.conformer_matching import get_torsion_angles, optimize_rotatable_bonds
-from utils.torsion import get_transformation_mask
+from dockdatasets.conformer_matching import get_torsion_angles, optimize_rotatable_bonds
+from dockutils.torsion import get_transformation_mask
 
 
 biopython_parser = PDBParser()
@@ -217,6 +217,7 @@ def extract_receptor_structure(rec, lig, lm_embedding_chains=None):
     valid_lengths = []
     invalid_chain_ids = []
     valid_lm_embeddings = []
+    print(lm_embedding_chains)
     for i, chain in enumerate(rec):
         if chain.get_id() in valid_chain_ids:
             valid_coords.append(coords[i])

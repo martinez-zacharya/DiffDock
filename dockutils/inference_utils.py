@@ -8,8 +8,9 @@ from torch_geometric.data import Dataset, HeteroData
 import esm
 from trill.utils.lightning_models import ESM, CustomWriter
 import pytorch_lightning as pl
+import pandas as pd
 
-from datasets.process_mols import parse_pdb_from_path, generate_conformer, read_molecule, get_lig_graph_with_matching, \
+from dockdatasets.process_mols import parse_pdb_from_path, generate_conformer, read_molecule, get_lig_graph_with_matching, \
     extract_receptor_structure, get_rec_graph
 
 
@@ -95,7 +96,7 @@ def compute_ESM_embeddings(model, labels, sequences):
     repr_layers = [33]
     include = "per_tok"
     truncation_seq_length = 1022
-    model = ESM(eval(model), 0.0001, False)
+    # model = ESM(eval(model), 0.0001, False)
 
 
     dataset = FastaBatchedDataset(labels, sequences)
@@ -103,43 +104,43 @@ def compute_ESM_embeddings(model, labels, sequences):
     data_loader = torch.utils.data.DataLoader(
         dataset, collate_fn=model.alphabet.get_batch_converter(truncation_seq_length))
 
-    pred_writer = CustomWriter(output_dir=".", write_interval="epoch")
-    trainer = pl.Trainer(enable_checkpointing=False, callbacks=[pred_writer], devices=1, accelerator='gpu')
-    trainer.predict(model, data_loader)
-    cwd_files = os.listdir()
-    pt_files = [file for file in cwd_files if 'predictions_' in file]
-    pred_embeddings = []
-    for pt in pt_files:
-        preds = torch.load(pt)
-        for pred in preds:
-            for sublist in pred:
-                pred_embeddings.append(tuple([sublist[0][0], sublist[0][1]]))
-    embedding_df = pd.DataFrame(pred_embeddings, columns = ['Embeddings', 'Label'])
-    finaldf = embedding_df['Embeddings'].apply(pd.Series)
-    finaldf['Label'] = embedding_df['Label']
-    finaldf.to_csv(f'embeddings_diffdock.csv', index = False)
-    for file in pt_files:
-        os.remove(file)
-    del model
-    return finaldf
+    # pred_writer = CustomWriter(output_dir=".", write_interval="epoch")
+    # trainer = pl.Trainer(enable_checkpointing=False, callbacks=[pred_writer], devices=1, accelerator='gpu')
+    # trainer.predict(model, data_loader)
+    # cwd_files = os.listdir()
+    # pt_files = [file for file in cwd_files if 'predictions_' in file]
+    # pred_embeddings = []
+    # for pt in pt_files:
+    #     preds = torch.load(pt)
+    #     for pred in preds:
+    #         for sublist in pred:
+    #             pred_embeddings.append(tuple([sublist[0][0], sublist[0][1]]))
+    # embedding_df = pd.DataFrame(pred_embeddings, columns = ['Embeddings', 'Label'])
+    # finaldf = embedding_df['Embeddings'].apply(pd.Series)
+    # finaldf['Label'] = embedding_df['Label']
+    # finaldf.to_csv(f'embeddings_diffdock.csv', index = False)
+    # for file in pt_files:
+    #     os.remove(file)
+    # del model
+    # return finaldf
 
-    # assert all(-(model.num_layers + 1) <= i <= model.num_layers for i in repr_layers)
-    # repr_layers = [(i + model.num_layers + 1) % (model.num_layers + 1) for i in repr_layers]
-    # embeddings = {}
+    assert all(-(model.num_layers + 1) <= i <= model.num_layers for i in repr_layers)
+    repr_layers = [(i + model.num_layers + 1) % (model.num_layers + 1) for i in repr_layers]
+    embeddings = {}
 
-    # with torch.no_grad():
-    #     for batch_idx, (labels, strs, toks) in enumerate(data_loader):
-    #         print(f"Processing {batch_idx + 1} of {len(batches)} batches ({toks.size(0)} sequences)")
-    #         if torch.cuda.is_available():
-    #             toks = toks.to(device="cuda", non_blocking=True)
+    with torch.no_grad():
+        for batch_idx, (labels, strs, toks) in enumerate(data_loader):
+            # print(f"Processing {batch_idx + 1} of {len(batches)} batches ({toks.size(0)} sequences)")
+            if torch.cuda.is_available():
+                toks = toks.to(device="cuda", non_blocking=True)
 
-    #         out = model(toks, repr_layers=repr_layers, return_contacts=False)
-    #         representations = {layer: t.to(device="cpu") for layer, t in out["representations"].items()}
+            out = model(toks, repr_layers=repr_layers, return_contacts=False)
+            representations = {layer: t.to(device="cpu") for layer, t in out["representations"].items()}
 
-    #         for i, label in enumerate(labels):
-    #             truncate_len = min(truncation_seq_length, len(strs[i]))
-    #             embeddings[label] = representations[33][i, 1: truncate_len + 1].clone()
-    # return embeddings
+            for i, label in enumerate(labels):
+                truncate_len = min(truncation_seq_length, len(strs[i]))
+                embeddings[label] = representations[33][i, 1: truncate_len + 1].clone()
+    return embeddings
 
 
 def generate_ESM_structure(model, filename, sequence):
@@ -191,13 +192,15 @@ class InferenceDataset(Dataset):
         self.protein_sequences = protein_sequences
 
         # generate LM embeddings
-        if lm_embeddings and (precomputed_lm_embeddings is None or precomputed_lm_embeddings[0] is None):
+        # if lm_embeddings and (precomputed_lm_embeddings is None or precomputed_lm_embeddings[0] is None):
+        if lm_embeddings:
             print("Generating ESM language model embeddings")
+            # model = "esm.pretrained.esm2_t33_650M_UR50D()"
             model_location = "esm2_t33_650M_UR50D"
-            # model, alphabet = pretrained.load_model_and_alphabet(model_location)
-            # model.eval()
-            # if torch.cuda.is_available():
-            #     model = model.cuda()
+            model, alphabet = pretrained.load_model_and_alphabet(model_location)
+            model.eval()
+            if torch.cuda.is_available():
+                model = model.cuda()
 
             protein_sequences = get_sequences(protein_files, protein_sequences)
             labels, sequences = [], []
@@ -209,11 +212,13 @@ class InferenceDataset(Dataset):
             lm_embeddings = compute_ESM_embeddings(model, labels, sequences)
 
             self.lm_embeddings = []
-            for ix, chain in lm_embeddings.iterrows():
-                self.lm_embeddings.append(chain[:-1])
-            # for i in range(len(protein_sequences)):
-            #     s = protein_sequences[i].split(':')
-            #     self.lm_embeddings.append([lm_embeddings[complex_names[i] + '_chain_' + str(j)] for j in range(len(s))])
+            # for ix, chain in lm_embeddings.iterrows():
+            #     self.lm_embeddings.append(chain[:-1])
+            for i in range(len(protein_sequences)):
+                s = protein_sequences[i].split(':')
+                self.lm_embeddings.append([lm_embeddings[complex_names[i] + '_chain_' + str(j)] for j in range(len(s))])
+            
+            print(self.lm_embeddings)
 
         # elif not lm_embeddings:
         #     self.lm_embeddings = [None] * len(self.complex_names)

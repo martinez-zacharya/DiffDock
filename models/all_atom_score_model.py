@@ -4,14 +4,16 @@ from torch import nn
 from torch.nn import functional as F
 from torch_cluster import radius, radius_graph
 from torch_scatter import scatter_mean
+import pytorch_lightning as pl
 import numpy as np
 
 from models.score_model import AtomEncoder, TensorProductConvLayer, GaussianSmearing
-from utils import so3, torus
-from datasets.process_mols import lig_feature_dims, rec_residue_feature_dims, rec_atom_feature_dims
+from dockutils import so3, torus
+from dockdatasets.process_mols import lig_feature_dims, rec_residue_feature_dims, rec_atom_feature_dims
 
 
 class TensorProductScoreModel(torch.nn.Module):
+# class TensorProductScoreModel(pl.LightningModule):
     def __init__(self, t_to_sigma, device, timestep_emb_func, in_lig_edge_features=4, sigma_embed_dim=32, sh_lmax=2,
                  ns=16, nv=4, num_conv_layers=2, lig_max_radius=5, rec_max_radius=30, cross_max_distance=250,
                  center_max_distance=30, distance_embed_dim=32, cross_distance_embed_dim=32, no_torsion=False,
@@ -413,3 +415,11 @@ class TensorProductScoreModel(torch.nn.Module):
         edge_sh = o3.spherical_harmonics(self.sh_irreps, edge_vec, normalize=True, normalization='component')
 
         return bonds, edge_index, edge_attr, edge_sh
+    
+    def training_step(self, batch, batch_idx):
+        pass
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-5)
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1)
+        return [optimizer], [lr_scheduler]
