@@ -58,8 +58,11 @@ def run_diffdock(args, diffdock_root):
         with open(f'{args.confidence_model_dir}/model_parameters.yml') as f:
             confidence_args = Namespace(**yaml.full_load(f))
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
+    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if int(args.GPUs) != 0:
+        device = torch.device('cuda')
+    else:
+        device = torch.device('cpu')
     # if args.protein_ligand_csv is not None:
     #     df = pd.read_csv(args.protein_ligand_csv)
     #     complex_name_list = set_nones(df['complex_name'].tolist())
@@ -89,7 +92,7 @@ def run_diffdock(args, diffdock_root):
                                     receptor_radius=score_model_args.receptor_radius, remove_hs=score_model_args.remove_hs,
                                     c_alpha_max_neighbors=score_model_args.c_alpha_max_neighbors,
                                     all_atoms=score_model_args.all_atoms, atom_radius=score_model_args.atom_radius,
-                                    atom_max_neighbors=score_model_args.atom_max_neighbors)
+                                    atom_max_neighbors=score_model_args.atom_max_neighbors, args=args)
     test_loader = DataLoader(dataset=test_dataset, batch_size=1, shuffle=False)
 
     if args.confidence_model_dir is not None and not confidence_args.use_original_model_cache:
@@ -103,7 +106,7 @@ def run_diffdock(args, diffdock_root):
                             c_alpha_max_neighbors=confidence_args.c_alpha_max_neighbors,
                             all_atoms=confidence_args.all_atoms, atom_radius=confidence_args.atom_radius,
                             atom_max_neighbors=confidence_args.atom_max_neighbors,
-                            precomputed_lm_embeddings=test_dataset.lm_embeddings)
+                            precomputed_lm_embeddings=test_dataset.lm_embeddings, args=args)
     else:
         confidence_test_dataset = None
 
@@ -129,16 +132,13 @@ def run_diffdock(args, diffdock_root):
 
     failures, skipped = 0, 0
     N = args.samples_per_complex
-    print('Size of test dataset: ', len(test_dataset))
     for idx, orig_complex_graph in enumerate(test_loader):
-        print(orig_complex_graph)
         if not orig_complex_graph.success[0]:
             skipped += 1
             print(f"HAPPENING | The test dataset did not contain {test_dataset.complex_names[idx]} for {test_dataset.ligand_descriptions[idx]} and {test_dataset.protein_files[idx]}. We are skipping this complex.")
             continue
         # try:
         if confidence_test_dataset is not None:
-            print('here')
             confidence_complex_graph = confidence_test_dataset[idx]
             if not confidence_complex_graph.success:
                 skipped += 1
@@ -147,9 +147,7 @@ def run_diffdock(args, diffdock_root):
             confidence_data_list = [copy.deepcopy(confidence_complex_graph) for _ in range(N)]
         else:
             confidence_data_list = None
-        print('precopy')
         data_list = [copy.deepcopy(orig_complex_graph) for _ in range(N)]
-        print('postcopy')
         randomize_position(data_list, score_model_args.no_torsion, False, score_model_args.tr_sigma_max)
         lig = orig_complex_graph.mol[0]
 
@@ -167,7 +165,6 @@ def run_diffdock(args, diffdock_root):
             visualization_list = None
 
         # run reverse diffusion
-        print('pre sampling')
         data_list, confidence = sampling(data_list=data_list, model=model,
                                         inference_steps=args.actual_steps if args.actual_steps is not None else args.inference_steps,
                                         tr_schedule=tr_schedule, rot_schedule=tr_schedule, tor_schedule=tr_schedule,
@@ -175,7 +172,6 @@ def run_diffdock(args, diffdock_root):
                                         visualization_list=visualization_list, confidence_model=confidence_model,
                                         confidence_data_list=confidence_data_list, confidence_model_args=confidence_args,
                                         batch_size=32, no_final_step_noise=args.no_final_step_noise)
-        print('here post')
         ligand_pos = np.asarray([complex_graph['ligand'].pos.cpu().numpy() + orig_complex_graph.original_center.cpu().numpy() for complex_graph in data_list])
 
         # reorder predictions based on confidence output

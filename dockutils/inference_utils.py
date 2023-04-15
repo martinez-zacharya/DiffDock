@@ -131,7 +131,7 @@ def compute_ESM_embeddings(model, labels, sequences):
     with torch.no_grad():
         for batch_idx, (labels, strs, toks) in enumerate(data_loader):
             # print(f"Processing {batch_idx + 1} of {len(batches)} batches ({toks.size(0)} sequences)")
-            if torch.cuda.is_available():
+            if next(model.parameters()).is_cuda:
                 toks = toks.to(device="cuda", non_blocking=True)
 
             out = model(toks, repr_layers=repr_layers, return_contacts=False)
@@ -177,7 +177,7 @@ def generate_ESM_structure(model, filename, sequence):
 class InferenceDataset(Dataset):
     def __init__(self, out_dir, complex_names, protein_files, ligand_descriptions, protein_sequences, lm_embeddings,
                  receptor_radius=30, c_alpha_max_neighbors=None, precomputed_lm_embeddings=None,
-                 remove_hs=False, all_atoms=False, atom_radius=5, atom_max_neighbors=None):
+                 remove_hs=False, all_atoms=False, atom_radius=5, atom_max_neighbors=None, args={}):
 
         super(InferenceDataset, self).__init__()
         self.receptor_radius = receptor_radius
@@ -199,7 +199,7 @@ class InferenceDataset(Dataset):
             model_location = "esm2_t33_650M_UR50D"
             model, alphabet = pretrained.load_model_and_alphabet(model_location)
             model.eval()
-            if torch.cuda.is_available():
+            if int(args.GPUs) != 0:
                 model = model.cuda()
 
             protein_sequences = get_sequences(protein_files, protein_sequences)
@@ -218,7 +218,6 @@ class InferenceDataset(Dataset):
                 s = protein_sequences[i].split(':')
                 self.lm_embeddings.append([lm_embeddings[complex_names[i] + '_chain_' + str(j)] for j in range(len(s))])
             
-            print(self.lm_embeddings)
 
         # elif not lm_embeddings:
         #     self.lm_embeddings = [None] * len(self.complex_names)
