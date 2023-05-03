@@ -201,8 +201,8 @@ def run_diffdock(args, diffdock_root):
                     visualization_list[batch_idx].write(os.path.join(write_dir, f'rank{rank+1}_reverseprocess.pdb'))
 
         # except Exception as e:
-            print("Failed on", orig_complex_graph["name"], e)
-            failures += 1
+            # print("Failed on", orig_complex_graph["name"], e)
+            # failures += 1
 
     print(f'Failed for {failures} complexes')
     print(f'Skipped {skipped} complexes')
