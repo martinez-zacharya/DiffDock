@@ -45,7 +45,7 @@ import yaml
 def run_diffdock(args, diffdock_root):
 
     args.protein_ligand_csv = None
-    args.out_dir = 'DiffDock_out'
+    args.out_dir = os.path.join(args.outdir, f'{args.name}_DiffDock_out')
     args.model_dir = f'{diffdock_root}/workdir/paper_score_model'
     args.ckpt = f'best_ema_inference_epoch_model.pt'
     args.confidence_model_dir = f'{diffdock_root}/workdir/paper_confidence_model'
