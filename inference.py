@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from rdkit import RDLogger
 from torch_geometric.loader import DataLoader
+from pathlib import Path
 
 from dockdatasets.process_mols import write_mol_with_coords
 from dockutils.diffusion_utils import t_to_sigma as t_to_sigma_compl, get_t_schedule
@@ -45,13 +46,13 @@ import yaml
 def run_diffdock(args, diffdock_root):
 
     args.protein_ligand_csv = None
-    args.out_dir = os.path.join(args.outdir, f'{args.name}_DiffDock_out')
+    # args.out_dir = os.path.join(args.outdir, f'{args.name}_DiffDock_out')
     args.model_dir = f'{diffdock_root}/workdir/paper_score_model'
     args.ckpt = f'best_ema_inference_epoch_model.pt'
     args.confidence_model_dir = f'{diffdock_root}/workdir/paper_confidence_model'
     args.confidence_ckpt = f'best_model_epoch75.pt'
 
-    os.makedirs(args.out_dir, exist_ok=True)
+    # os.makedirs(args.out_dir, exist_ok=True)
     with open(f'{args.model_dir}/model_parameters.yml') as f:
         score_model_args = Namespace(**yaml.full_load(f))
     if args.confidence_model_dir is not None:
@@ -86,8 +87,32 @@ def run_diffdock(args, diffdock_root):
     protein_seq = "".join([seq for seq in protein_seq[0][-1].values()])
 
     # preprocessing of complexes into geometric graphs
-    test_dataset = InferenceDataset(out_dir=args.out_dir, complex_names=[args.name], protein_files=[args.protein],
-                                    ligand_descriptions=[args.ligand], protein_sequences=protein_seq,
+    lig_list = []
+    comp_list = []
+    rec_list = []
+    rec_name = Path(args.protein).stem
+    out_dir_list = []
+    if args.ligand.endswith(".txt"):
+        with open(args.ligand, "r") as infile:
+            for path in infile:
+                path = path.strip()
+                if not path:
+                    continue
+                lig_list.append(path)
+                lig_name = Path(path).stem
+                comp_list.append(f'{rec_name}_{lig_name}')
+                out_dir_list.append(os.path.join(args.outdir, (rec_name + '_' + lig_name)))
+                
+    else:
+        lig_list.append(args.ligand)
+        lig_name = Path(args.ligand).stem
+        comp_list.append(f'{rec_name}_{lig_name}')
+        out_dir_list.append(os.path.join(args.outdir, (rec_name + '_' + lig_name)))
+
+    for x in lig_list:
+        rec_list.append(args.protein)
+    test_dataset = InferenceDataset(out_dir=out_dir_list, complex_names=comp_list, protein_files=rec_list,
+                                    ligand_descriptions=lig_list, protein_sequences=protein_seq,
                                     lm_embeddings=True,
                                     receptor_radius=score_model_args.receptor_radius, remove_hs=score_model_args.remove_hs,
                                     c_alpha_max_neighbors=score_model_args.c_alpha_max_neighbors,
@@ -99,8 +124,8 @@ def run_diffdock(args, diffdock_root):
         print('HAPPENING | confidence model uses different type of graphs than the score model. '
             'Loading (or creating if not existing) the data for the confidence model now.')
         confidence_test_dataset = \
-            InferenceDataset(out_dir=args.out_dir, complex_names=[args.name], protein_files=[args.protein],
-                            ligand_descriptions=[args.ligand], protein_sequences=protein_seq,
+            InferenceDataset(out_dir=out_dir_list, complex_names=comp_list, protein_files=rec_list,
+                            ligand_descriptions=lig_list, protein_sequences=protein_seq,
                             lm_embeddings=confidence_args.esm_embeddings_path is not None,
                             receptor_radius=confidence_args.receptor_radius, remove_hs=confidence_args.remove_hs,
                             c_alpha_max_neighbors=confidence_args.c_alpha_max_neighbors,
@@ -184,7 +209,10 @@ def run_diffdock(args, diffdock_root):
             ligand_pos = ligand_pos[re_order]
 
         # save predictions
-        write_dir = f'{args.out_dir}/'
+        # write_dir = f'{args.out_dir}/'
+        write_dir = out_dir_list[idx] + '/'
+        if not os.path.exists(write_dir):
+            os.makedirs(write_dir)
         for rank, pos in enumerate(ligand_pos):
             mol_pred = copy.deepcopy(lig)
             if score_model_args.remove_hs: mol_pred = RemoveHs(mol_pred)
@@ -206,6 +234,6 @@ def run_diffdock(args, diffdock_root):
 
     print(f'Failed for {failures} complexes')
     print(f'Skipped {skipped} complexes')
-    print(f'Results are in {args.out_dir}')
+    print(f'Results are in {args.outdir}')
 
 
