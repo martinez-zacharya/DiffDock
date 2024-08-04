@@ -52,14 +52,26 @@ def get_sequences(protein_files, protein_sequences):
     return new_sequences
 
 
-def compute_ESM_embeddings(model, alphabet, labels, sequences):
+def compute_ESM_embeddings(model, alphabet, protein_filenames, sequences):
     # settings used
     toks_per_batch = 4096
     repr_layers = [33]
     include = "per_tok"
     truncation_seq_length = 1022
+    embeddings = {}
+    sequence_embedding_cache = {}
+    unique_sequences = []
+    unique_labels = []
+    for i, seq in enumerate(sequences):
+        label = protein_filenames[i]
+        if label not in sequence_embedding_cache:
+            unique_sequences.append(seq)
+            unique_labels.append(label)
 
-    dataset = FastaBatchedDataset(labels, sequences)
+    if not unique_sequences:
+        return sequence_embedding_cache
+    # dataset = FastaBatchedDataset(labels, sequences)
+    dataset = FastaBatchedDataset(unique_labels, unique_sequences)
     batches = dataset.get_batch_indices(toks_per_batch, extra_toks_per_seq=1)
     data_loader = torch.utils.data.DataLoader(
         dataset, collate_fn=alphabet.get_batch_converter(truncation_seq_length), batch_sampler=batches
@@ -67,7 +79,6 @@ def compute_ESM_embeddings(model, alphabet, labels, sequences):
 
     assert all(-(model.num_layers + 1) <= i <= model.num_layers for i in repr_layers)
     repr_layers = [(i + model.num_layers + 1) % (model.num_layers + 1) for i in repr_layers]
-    embeddings = {}
 
     with torch.no_grad():
         for batch_idx, (labels, strs, toks) in enumerate(data_loader):
@@ -79,8 +90,15 @@ def compute_ESM_embeddings(model, alphabet, labels, sequences):
             representations = {layer: t.to(device="cpu") for layer, t in out["representations"].items()}
 
             for i, label in enumerate(labels):
-                truncate_len = min(truncation_seq_length, len(strs[i]))
-                embeddings[label] = representations[33][i, 1: truncate_len + 1].clone()
+                seq = strs[i]
+                truncate_len = min(truncation_seq_length, len(seq))
+                sequence_embedding_cache[label] = representations[33][i, 1: truncate_len + 1].clone()
+
+
+    # Map the cached embeddings to their respective labels
+    for seq, label in zip(sequences, protein_filenames):
+        embeddings[label] = sequence_embedding_cache[label]
+
     return embeddings
 
 
@@ -143,18 +161,30 @@ class InferenceDataset(Dataset):
                 model = model.cuda()
 
             protein_sequences = get_sequences(protein_files, protein_sequences)
+            sequence_to_label = {}
             labels, sequences = [], []
             for i in range(len(protein_sequences)):
                 s = protein_sequences[i].split(':')
                 sequences.extend(s)
-                labels.extend([complex_names[i] + '_chain_' + str(j) for j in range(len(s))])
+                protein_filename = os.path.splitext(os.path.basename(protein_files[i]))[0]
+                for j in range(len(s)):
+                    label = f'{protein_filename}_chain_{j}'
+                    labels.append(label)
+                    sequence_to_label[s[j]] = f'{protein_filename}_chain_{j}'
 
-            lm_embeddings = compute_ESM_embeddings(model, alphabet, labels, sequences)
+            unique_protein_files = list(set(protein_files))
+            unique_protein_sequences = [get_sequences([f], [protein_sequences[protein_files.index(f)]])[0] for f in unique_protein_files]
+            unique_protein_filenames = [os.path.splitext(os.path.basename(f))[0] for f in unique_protein_files]
+            
+            unique_lm_embeddings = compute_ESM_embeddings(model, alphabet, unique_protein_filenames, unique_protein_sequences)
 
+            # Map embeddings to original complexes
             self.lm_embeddings = []
             for i in range(len(protein_sequences)):
                 s = protein_sequences[i].split(':')
-                self.lm_embeddings.append([lm_embeddings[f'{complex_names[i]}_chain_{j}'] for j in range(len(s))])
+                protein_filename = os.path.splitext(os.path.basename(protein_files[i]))[0]
+                self.lm_embeddings.append([unique_lm_embeddings[f'{protein_filename}'] for j in range(len(s))])
+
 
         elif not lm_embeddings:
             self.lm_embeddings = [None] * len(self.complex_names)

@@ -221,7 +221,7 @@ def main(args):
     N = args.samples_per_complex
     test_ds_size = len(test_dataset)
     logger.info(f'Size of test dataset: {test_ds_size}')
-    for idx, orig_complex_graph in tqdm(enumerate(test_loader)):
+    for idx, orig_complex_graph in tqdm(enumerate(test_loader), total=len(test_loader), desc="Docking complexes"):
         if not orig_complex_graph.success[0]:
             skipped += 1
             logger.warning(f"The test dataset did not contain {test_dataset.complex_names[idx]} for {test_dataset.ligand_descriptions[idx]} and {test_dataset.protein_files[idx]}. We are skipping this complex.")
