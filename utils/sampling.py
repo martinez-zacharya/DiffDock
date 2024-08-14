@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from torch_geometric.data import Batch
 from torch_geometric.loader import DataLoader
-
+from tqdm import tqdm, trange
 from utils.diffusion_utils import modify_conformer, set_time, modify_conformer_batch
 from utils.torsion import modify_conformer_torsion_angles
 from scipy.spatial.transform import Rotation as R
@@ -93,7 +93,7 @@ def sampling(data_list, model, inference_steps, tr_schedule, rot_schedule, tor_s
             n = len(complex_graph_batch['ligand'].pos) // b
             complex_graph_batch = complex_graph_batch.to(device)
 
-            for t_idx in range(inference_steps):
+            for t_idx in trange(inference_steps, desc=f"Inferring..."):
                 t_tr, t_rot, t_tor = tr_schedule[t_idx], rot_schedule[t_idx], tor_schedule[t_idx]
                 dt_tr = tr_schedule[t_idx] - tr_schedule[t_idx + 1] if t_idx < inference_steps - 1 else tr_schedule[t_idx]
                 dt_rot = rot_schedule[t_idx] - rot_schedule[t_idx + 1] if t_idx < inference_steps - 1 else rot_schedule[t_idx]
